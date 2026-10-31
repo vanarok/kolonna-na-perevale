@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Колонна на перевале</title>
+<meta name="description" content="Ритм-миссия на чистых ударных: колонна идёт через перевал, выстрелы в такт становятся частью музыки.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Russo+One&display=swap">
+<style>
+body { margin: 0; }
+[hidden] { display: none !important; }
+/* Layout: full-bleed scene with the convoy rolling right; HUD strip on top, mission timeline at the bottom. */
+:root {
+  --ground: #14130f;
+  --bone: #e9dfc9;
+  --ash: #a89c86;
+  --tracer: #ffb347;
+  --hostile: #e4572e;
+  --olive: #6f7a4a;
+  --display: "Russo One", "Arial Black", Impact, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--ground); color: var(--bone); font-family: var(--mono); overflow: hidden; }
+.stage { position: fixed; inset: 0; overflow: hidden; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+.hud {
+  position: absolute; inset: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px;
+  padding-top: calc(12px + env(safe-area-inset-top, 0px)); padding-bottom: 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: linear-gradient(rgba(10,9,7,.78), rgba(10,9,7,0)); pointer-events: none;
+}
+.hud .section { flex: 1 1 200px; min-width: 0; }
+.hud .section b { display: block; font: 400 clamp(18px, 3vw, 26px)/1.1 var(--display); letter-spacing: .04em; }
+.hud .section span { font-size: 12px; color: var(--ash); }
+.stat { font-variant-numeric: tabular-nums; text-align: right; }
+.stat small { display: block; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ash); }
+.stat strong { font: 600 18px/1.2 var(--mono); }
+.armor { width: clamp(90px, 16vw, 170px); height: 8px; margin-top: 5px; background: rgba(233,223,201,.18); }
+.armor i { display: block; height: 100%; width: 100%; background: var(--olive); transition: width .15s, background .2s; }
+.armor.low i { background: var(--hostile); }
+button { font-family: var(--mono); color: var(--bone); cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--tracer); outline-offset: 3px; }
+#pause { pointer-events: auto; background: rgba(10,9,7,.5); border: 1px solid rgba(233,223,201,.35); padding: 8px 12px; font-size: 13px; }
+
+.timeline {
+  position: absolute; inset: auto 0 0; display: flex; gap: 3px; pointer-events: none;
+  padding-top: 6px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.seg { min-width: 0; font-size: 11px; color: var(--ash); }
+.seg u { display: block; height: 4px; margin-bottom: 4px; background: rgba(233,223,201,.2); text-decoration: none; }
+.seg u i { display: block; height: 100%; width: 0; background: var(--tracer); }
+.seg em { font-style: normal; display: block; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+@media (max-width: 620px) { .seg em { display: none; } }
+
+.overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; overflow: auto;
+  padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: linear-gradient(90deg, rgba(10,9,7,.9) 0%, rgba(10,9,7,.72) 48%, rgba(10,9,7,.1) 100%);
+}
+.brief { width: 100%; max-width: 560px; margin-left: clamp(0px, 5vw, 72px); display: grid; gap: 16px; }
+.eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--tracer); }
+h1 { margin: 0; font: 400 clamp(38px, 7.4vw, 76px)/.98 var(--display); text-wrap: balance; }
+.brief p { margin: 0; font-size: 15px; line-height: 1.55; color: var(--bone); max-width: 60ch; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.actions button { padding: 13px 18px; font-size: 15px; font-weight: 600; border: 1px solid var(--bone); background: transparent; }
+.actions button.primary { background: var(--tracer); border-color: var(--tracer); color: #1b1408; }
+.actions button:hover { filter: brightness(1.12); }
+.controls { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; font-size: 13px; color: var(--ash); }
+.controls kbd { font: 600 13px var(--mono); color: var(--bone); }
+.results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.results div { font-variant-numeric: tabular-nums; }
+.results small { display: block; font-size: 11px; color: var(--ash); letter-spacing: .08em; text-transform: uppercase; }
+.results strong { font: 600 24px var(--mono); }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <canvas id="c" aria-label="Колонна техники идёт по горной дороге, стрелок бьёт по целям в такт ударным"></canvas>
+
+  <div class="hud" id="hud" hidden>
+    <div class="section"><b id="secName">Перевал</b><span id="secSub"></span></div>
+    <div class="stat"><small>Броня</small><div class="armor" id="armor"><i id="armorFill"></i></div></div>
+    <div class="stat"><small>Серия</small><strong id="combo">0</strong></div>
+    <div class="stat"><small>Счёт</small><strong id="score">0</strong></div>
+    <button id="pause" type="button">Пауза</button>
+  </div>
+  <div class="timeline" id="timeline" hidden></div>
+
+  <div class="overlay" id="overlay">
+    <div class="brief">
+      <div class="eyebrow" id="ovEyebrow">Ритм-миссия · 96 ударов в минуту · 1:50</div>
+      <h1 id="ovTitle">Колонна на перевале</h1>
+      <p id="ovText">Семь частей ударных: от одинокого большого барабана в горах до полного прорыва. Выстрелы стрелка становятся частью партитуры, поэтому точная стрельба и есть музыка.</p>
+      <div class="results" id="ovResults" hidden></div>
+      <div class="actions">
+        <button class="primary" id="btnPlay" type="button">Начать миссию</button>
+        <button id="btnAuto" type="button">Только слушать</button>
+      </div>
+      <div class="controls" id="ovControls">
+        <kbd>F или ↑</kbd><span>огонь по высоте, когда цель входит в прицел</span>
+        <kbd>J или ↓</kbd><span>огонь по дороге</span>
+        <kbd>Экран</kbd><span>нажатие выше или ниже середины между прицелами</span>
+        <kbd>Esc</kbd><span>пауза</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const BPM = 96, STEP = 60 / BPM / 4, BEAT = STEP * 4;
+  const PERFECT = 0.05, GOOD = 0.12;
+  const VEL = { X: 1, x: 0.72, o: 0.32 };
+
+  // Each track holds 16-step bars and cycles through them. Shots: h = ridge, r = road.
+  const SONG = [
+    { name: 'Перевал', sub: 'Тишина, ветер и дальний барабан', bars: 4, heat: .12, wind: 1, tracks: {
+      boom: ['X...............', '........x.......', 'X...............', 'x.......x.....x.'],
+      stick: ['', '', '....o.......o...', '....o...o...o.oo'],
+      snare: ['', '', '', '........o.o.ooxx'] } },
+    { name: 'Марш', sub: 'Колонна набирает ход', bars: 8, heat: .24, wind: .7, tracks: {
+      kick: ['X.......x.......', 'X.......x.....x.'],
+      snare: ['x.ooxoo.x.ooxoxo', 'x.ooxoo.x.oox.ox'],
+      chain: ['..o...o...o...o.'],
+      tomL: ['', '..............xx'],
+      taiko: ['', '', '', 'x.......x.......'] } },
+    { name: 'Контакт', sub: 'Цели на высоте и у дороги', bars: 8, heat: .5, wind: .55, tracks: {
+      kick: ['X..x....x.......', 'X..x....x..x..x.'],
+      snare: ['o.oo.oo.o.oo.oo.'],
+      taiko: ['', '........x...x...'],
+      metal: ['', '..............x.'],
+      chain: ['..o...o...o...o.'] },
+      shots: ['....h.......h...', '....h.......r...', '....h...h...r...', '....r.....r.h...',
+              '....h.......h...', '....r.....h.r...', '....h...r...h...', 'h...h...r...r...'] },
+    { name: 'Засада', sub: 'Огонь с двух сторон', bars: 8, heat: .92, wind: .4, tracks: {
+      kick: ['X.x...x.X.x...x.', 'X.x...x.X.x..xx.'],
+      taiko: ['X..x..x...x..x..', 'X..x..x...x.x.x.'],
+      tomL: ['..............xx', '............xxxx'],
+      snare: ['x.oox.oox.oox.ox'],
+      metal: ['....x.......x...', '....x.....x.x...'],
+      chain: ['o.o.o.o.o.o.o.o.'] },
+      shots: ['h...r...h..r..h.', 'r..h..r...h.r...', 'h...r...h..r..h.', 'r..h..r...h.r.h.',
+              'h.h.r...h..r..h.', 'r..h..r.h...r...', 'h...r.h...r.h...', 'r.h.r.h.r.h.r.h.'] },
+    { name: 'Затишье', sub: 'Перезарядка. Слушай дорогу', bars: 4, heat: .36, wind: 1, tracks: {
+      boom: ['X...............', '', 'x.......x.......', 'x...x...x...x.x.'],
+      stick: ['....o.......o...'],
+      snare: ['', '', '', '........x.x.xxXX'] },
+      shots: ['', '........h.......', '', '............r...'] },
+    { name: 'Прорыв', sub: 'Всё, что есть. До конца перевала', bars: 8, heat: 1, wind: .3, tracks: {
+      boom: ['X...............', '........X.......'],
+      kick: ['X.x.x...X.x.x.x.', 'X.x.x..xX.x.x.xx'],
+      taiko: ['X.xx.xx.X.xx.xx.'],
+      tomL: ['....x..x....x..x'],
+      snare: ['x.oox.oox.ooxoxo'],
+      metal: ['..x...x...x...x.'],
+      chain: ['o.o.o.o.o.o.o.o.'] },
+      shots: ['h.r.h.r.h..r..h.', 'r.h.r.h.r..h..r.', 'h.r.h.r.h.h.r.r.', 'h..r..h.r..h..r.',
+              'h.r.h.r.h..r..h.', 'r.h.r.h.r.h.r.h.', 'h.h.r.r.h.h.r.r.', 'h.r.h.r.h.r.h.r.'] },
+    { name: 'Прошли', sub: 'Колонна уходит за гребень', bars: 4, heat: .16, wind: 1, fade: .24, tracks: {
+      boom: ['X...............', '........x.......', 'X...............', ''],
+      snare: ['x.oo.oo.o.oo.oo.', 'o.oo.oo.o..o..o.', 'o...o...o.......', ''],
+      chain: ['..o...o...o...o.', '..o.......o.....', '', ''] } },
+  ];
+
+  let bar0 = 0;
+  for (const s of SONG) { s.start = bar0; bar0 += s.bars; }
+  const TOTAL_BARS = bar0, TOTAL = TOTAL_BARS * 16 * STEP;
+  const sectionAtBar = b => SONG.find(s => b >= s.start && b < s.start + s.bars) || SONG[SONG.length - 1];
+
+  function buildChart() {
+    const out = [];
+    for (const s of SONG) {
+      if (!s.shots) continue;
+      for (let b = 0; b < s.bars; b++) {
+        const p = s.shots[b % s.shots.length];
+        for (let i = 0; i < p.length; i++) {
+          if (p[i] === 'h' || p[i] === 'r') {
+            out.push({ time: (s.start + b) * 16 * STEP + i * STEP, lane: p[i], state: 'wait', v: Math.random() });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /* ---------- Audio ---------- */
+  let ac, dry, rev, master, noiseBuf, ambience = null;
+
+  function initAudio() {
+    if (ac) return;
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain();
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.ratio.value = 5; comp.attack.value = .004; comp.release.value = .16;
+    const limiter = ac.createDynamicsCompressor();
+    limiter.threshold.value = -4; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = .001; limiter.release.value = .09;
+    master.connect(comp); comp.connect(limiter); limiter.connect(ac.destination);
+    dry = ac.createGain(); dry.gain.value = .46; dry.connect(master);
+
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+
+    // Canyon echo: long dark impulse with one slapback off the far wall.
+    const len = ac.sampleRate * 3.2 | 0, ir = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      const slap = (ac.sampleRate * (ch ? .29 : .26)) | 0;
+      let lp = 0;
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        lp += ((Math.random() * 2 - 1) - lp) * (.34 - .28 * t);
+        d[i] = lp * Math.pow(1 - t, 3.4) * 1.1;
+        if (i >= slap && i < slap + 900) d[i] += (Math.random() * 2 - 1) * .34 * (1 - (i - slap) / 900);
+      }
+    }
+    const conv = ac.createConvolver(); conv.buffer = ir;
+    rev = ac.createGain(); rev.gain.value = .42;
+    rev.connect(conv); conv.connect(master);
+  }
+
+  function route(node, send) {
+    node.connect(dry);
+    if (send > 0) { const s = ac.createGain(); s.gain.value = send; node.connect(s); s.connect(rev); }
+  }
+  function tone(t, { f0, f1 = f0, sweep = .06, dec, peak, type = 'sine', send = 0, dest = null }) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + sweep);
+    g.gain.setValueAtTime(Math.max(peak, .0002), t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dec);
+    o.connect(g);
+    if (dest) g.connect(dest); else route(g, send);
+    o.start(t); o.stop(t + dec + .02);
+  }
+  function hiss(t, { kind, freq, q = .8, dec, peak, send = 0 }) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noiseBuf; s.loop = true;
+    f.type = kind; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(Math.max(peak, .0002), t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dec);
+    s.connect(f); f.connect(g); route(g, send);
+    s.start(t, Math.random() * 1.8, dec + .02);
+  }
+
+  const KIT = {
+    boom(t, v) {
+      tone(t, { f0: 92, f1: 33, sweep: .2, dec: 1.5, peak: 1.05 * v, send: .6 });
+      hiss(t, { kind: 'lowpass', freq: 190, dec: .55, peak: .55 * v, send: .6 });
+      hiss(t, { kind: 'bandpass', freq: 900, dec: .03, peak: .25 * v, send: .3 });
+    },
+    kick(t, v) {
+      tone(t, { f0: 135, f1: 47, sweep: .08, dec: .3, peak: .95 * v, send: .08 });
+      hiss(t, { kind: 'highpass', freq: 2800, dec: .014, peak: .16 * v });
+    },
+    snare(t, v) {
+      const send = v > .5 ? .24 : .1;
+      hiss(t, { kind: 'bandpass', freq: 2300, q: .6, dec: .1 + v * .09, peak: .62 * v, send });
+      hiss(t, { kind: 'highpass', freq: 5200, dec: .17, peak: .13 * v });
+      tone(t, { f0: 245, f1: 176, sweep: .04, dec: .09, peak: .28 * v, type: 'triangle' });
+    },
+    stick(t, v) {
+      tone(t, { f0: 1780, dec: .028, peak: .24 * v, type: 'square', send: .42 });
+      hiss(t, { kind: 'bandpass', freq: 3600, q: 3, dec: .02, peak: .2 * v, send: .3 });
+    },
+    taiko(t, v) {
+      tone(t, { f0: 172, f1: 76, sweep: .05, dec: .55, peak: .88 * v, send: .36 });
+      hiss(t, { kind: 'lowpass', freq: 1300, dec: .035, peak: .4 * v, send: .2 });
+    },
+    tomL(t, v) { tone(t, { f0: 124, f1: 68, sweep: .07, dec: .32, peak: .72 * v, send: .22 }); },
+    metal(t, v) {
+      const f = ac.createBiquadFilter(), bus = ac.createGain();
+      f.type = 'bandpass'; f.frequency.value = 2500; f.Q.value = .9; bus.gain.value = 1;
+      f.connect(bus); route(bus, .52);
+      for (const hz of [523, 811, 1247, 1893]) tone(t, { f0: hz, dec: .24, peak: .1 * v, type: 'square', dest: f });
+    },
+    chain(t, v) { hiss(t, { kind: 'highpass', freq: 6400, dec: .05, peak: .3 * v }); },
+  };
+
+  function gunshot(t, lane) {
+    const heavy = lane === 'r';
+    hiss(t, { kind: 'highpass', freq: heavy ? 900 : 1700, dec: .05, peak: .85, send: .5 });
+    hiss(t, { kind: 'lowpass', freq: heavy ? 620 : 1250, dec: heavy ? .2 : .13, peak: .95, send: .7 });
+    tone(t, { f0: heavy ? 118 : 190, f1: heavy ? 40 : 82, sweep: .05, dec: heavy ? .28 : .16, peak: heavy ? .95 : .6, send: .3 });
+  }
+  function hostileShot(t) {
+    hiss(t, { kind: 'bandpass', freq: 2900, q: 1.6, dec: .03, peak: .2, send: 1 });
+    tone(t, { f0: 420, f1: 180, sweep: .03, dec: .05, peak: .1, send: .8 });
+  }
+
+  function startAmbience() {
+    stopAmbience();
+    const s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const windF = ac.createBiquadFilter(); windF.type = 'bandpass'; windF.frequency.value = 460; windF.Q.value = .7;
+    const windG = ac.createGain(); windG.gain.value = 0;
+    const lfo = ac.createOscillator(), lfoG = ac.createGain();
+    lfo.frequency.value = .08; lfoG.gain.value = 210; lfo.connect(lfoG); lfoG.connect(windF.frequency);
+    s.connect(windF); windF.connect(windG); windG.connect(master);
+
+    const eS = ac.createBufferSource(); eS.buffer = noiseBuf; eS.loop = true;
+    const eF = ac.createBiquadFilter(); eF.type = 'lowpass'; eF.frequency.value = 95;
+    const eG = ac.createGain(); eG.gain.value = 0;
+    const saw = ac.createOscillator(); saw.type = 'sawtooth'; saw.frequency.value = 41;
+    const sawF = ac.createBiquadFilter(); sawF.type = 'lowpass'; sawF.frequency.value = 120;
+    const sawG = ac.createGain(); sawG.gain.value = .22;
+    saw.connect(sawF); sawF.connect(sawG); sawG.connect(eG);
+    eS.connect(eF); eF.connect(eG); eG.connect(master);
+
+    s.start(); lfo.start(); eS.start(); saw.start();
+    ambience = { windG, eG, nodes: [s, lfo, eS, saw] };
+  }
+  function stopAmbience() {
+    if (!ambience) return;
+    ambience.nodes.forEach(n => { try { n.stop(); } catch (e) {} });
+    ambience = null;
+  }
+
+  /* ---------- Mission state ---------- */
+  const $ = id => document.getElementById(id);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const m = { mode: 'idle', auto: false, notes: [], start: 0, step: 0, armor: 100, score: 0, combo: 0, best: 0,
+              perfect: 0, good: 0, miss: 0, heat: .15, pulse: 0, boomGlow: 0, section: null };
+  let pulses = [], timer = null;
+
+  function latency() { return ac ? (ac.outputLatency || ac.baseLatency || 0) : 0; }
+  function songNow() { return ac.currentTime - m.start; }
+  function visualNow() { return songNow() - latency(); }
+
+  function scheduleStep(i) {
+    const bar = Math.floor(i / 16), pos = i % 16, sec = sectionAtBar(bar);
+    const t = m.start + i * STEP;
+    const fade = sec.fade ? Math.max(.2, 1 - (bar - sec.start) * sec.fade) : 1;
+    for (const inst in sec.tracks) {
+      const pat = sec.tracks[inst][(bar - sec.start) % sec.tracks[inst].length];
+      const ch = pat && pat[pos];
+      if (!ch || ch === '.') continue;
+      const v = VEL[ch] * fade * (.94 + Math.random() * .1);
+      KIT[inst](t + (Math.random() - .5) * .005, v);
+      if (inst === 'boom' || inst === 'kick' || inst === 'taiko') {
+        pulses.push({ at: t - m.start, amp: (inst === 'boom' ? 1 : inst === 'kick' ? .7 : .45) * v, boom: inst === 'boom' });
+      }
+    }
+    if (pos === 0 && ambience) {
+      const when = t;
+      ambience.windG.gain.linearRampToValueAtTime(.075 * sec.wind, when + 1.2);
+      ambience.eG.gain.linearRampToValueAtTime(bar >= 2 ? .34 * fade : .12, when + 1.6);
+    }
+  }
+
+  function arm(n, fire, grade) {
+    n.state = 'armed'; n.fire = fire; n.grade = grade;
+    gunshot(m.start + fire, n.lane);
+    if (grade === 'perfect') m.perfect++; else m.good++;
+    m.combo++; m.best = Math.max(m.best, m.combo);
+    m.score += Math.round((grade === 'perfect' ? 100 : 60) * (1 + Math.min(m.combo, 40) / 20));
+    if (m.combo % 10 === 0) m.armor = Math.min(100, m.armor + 2);
+    syncHud();
+  }
+
+  function tick() {
+    if (m.mode !== 'run') return;
+    const now = ac.currentTime;
+    while (m.step < TOTAL_BARS * 16 && m.start + m.step * STEP < now + .16) scheduleStep(m.step++);
+    if (m.auto) {
+      for (const n of m.notes) {
+        if (n.state === 'wait' && n.time < now - m.start + .16) arm(n, n.time, 'perfect');
+      }
+    }
+  }
+
+  function shoot(lane) {
+    if (m.mode !== 'run' || m.auto) return;
+    const vt = visualNow();
+    let best = null, bd = 1e9;
+    for (const n of m.notes) {
+      if (n.state !== 'wait' || n.lane !== lane) continue;
+      const d = Math.abs(n.time - vt);
+      if (d < bd) { bd = d; best = n; }
+    }
+    if (!best || bd > GOOD) {
+      m.dry = { lane, at: performance.now() };
+      return;
+    }
+    arm(best, Math.max(best.time, songNow() + .002), bd <= PERFECT ? 'perfect' : 'good');
+  }
+
+  function start(auto) {
+    initAudio();
+    ac.resume();
+    master.gain.cancelScheduledValues(ac.currentTime);
+    master.gain.setValueAtTime(1, ac.currentTime);
+    startAmbience();
+    Object.assign(m, { mode: 'run', auto, notes: buildChart(), start: ac.currentTime + .3, step: 0, armor: 100, score: 0,
+                       combo: 0, best: 0, perfect: 0, good: 0, miss: 0, section: null });
+    pulses = []; parts.length = 0; tracers.length = 0; popups.length = 0;
+    clearInterval(timer); timer = setInterval(tick, 25); tick();
+    $('overlay').hidden = true; $('hud').hidden = false; $('timeline').hidden = false;
+    $('pause').hidden = false;
+    syncHud();
+  }
+
+  function finish(failed) {
+    m.mode = failed ? 'failed' : 'done';
+    clearInterval(timer);
+    const t = ac.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(.0001, t + (failed ? 1.6 : 2.4));
+    setTimeout(stopAmbience, 2600);
+    const total = m.notes.length;
+    const acc = (m.perfect + m.good * .6) / total;
+    const verdict = failed ? 'Колонна остановлена'
+      : acc >= .95 ? 'Прошли без потерь' : acc >= .8 ? 'Колонна прошла'
+      : acc >= .6 ? 'Прошли с потерями' : 'Чудом прорвались';
+    showOverlay({
+      eyebrow: m.auto ? 'Запись боя окончена' : failed ? 'Миссия провалена' : 'Миссия выполнена',
+      title: m.auto ? 'Перевал пройден' : verdict,
+      text: failed ? 'Броня кончилась. Попробуй слушать малый барабан: он идёт ровно по тем долям, где появляются цели.'
+                   : m.auto ? 'Стрелок отработал партитуру идеально. Теперь можно попасть в ритм самому.' : '',
+      results: m.auto ? null : [['Точность', Math.round(acc * 100) + '%'], ['Счёт', m.score.toLocaleString('ru-RU')], ['Серия', m.best]],
+      play: 'Ещё раз', auto: 'Только слушать', controls: false,
+    });
+  }
+
+  function showOverlay({ eyebrow, title, text, results, play, auto, controls }) {
+    $('ovEyebrow').textContent = eyebrow; $('ovTitle').textContent = title;
+    $('ovText').textContent = text; $('ovText').hidden = !text;
+    const r = $('ovResults');
+    r.hidden = !results;
+    r.innerHTML = results ? results.map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('') : '';
+    $('btnPlay').textContent = play; $('btnAuto').textContent = auto;
+    $('ovControls').hidden = !controls;
+    $('overlay').hidden = false;
+    $('pause').hidden = true;
+    $('btnPlay').focus({ preventScroll: true });
+  }
+
+  let resumeFn = null;
+  function pause() {
+    if (m.mode !== 'run') return;
+    m.mode = 'paused';
+    ac.suspend();
+    resumeFn = () => { ac.resume(); m.mode = 'run'; $('overlay').hidden = true; $('pause').hidden = false; };
+    showOverlay({ eyebrow: 'Пауза', title: 'Колонна ждёт', text: '', results: null, play: 'Продолжить', auto: 'Заново', controls: false });
+  }
+
+  $('btnPlay').onclick = () => {
+    if (m.mode === 'paused') { const f = resumeFn; resumeFn = null; f(); return; }
+    start(false);
+  };
+  $('btnAuto').onclick = () => {
+    const replayAuto = m.mode === 'paused' ? m.auto : true;
+    start(replayAuto);
+  };
+  $('pause').onclick = pause;
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+
+  addEventListener('keydown', e => {
+    if (e.repeat) return;
+    const k = e.code;
+    if (k === 'Escape' || k === 'KeyP') { pause(); return; }
+    if (m.mode !== 'run') return;
+    if (k === 'KeyF' || k === 'ArrowUp') { e.preventDefault(); shoot('h'); }
+    else if (k === 'KeyJ' || k === 'ArrowDown') { e.preventDefault(); shoot('r'); }
+  });
+
+  /* ---------- Scene ---------- */
+  const cv = $('c'), g = cv.getContext('2d');
+  let W = 0, H = 0, S = 1, hitX = 0, yH = 0, yR = 0, roadTop = 0, roadBot = 0, spR = 0, spH = 0;
+  const parts = [], tracers = [], popups = [];
+  let turret = -.1, lastFrame = performance.now(), idleT = 0, targetAim = null, muzzle = 0;
+
+  function resize() {
+    const r = $('stage').getBoundingClientRect();
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    W = r.width; H = r.height;
+    cv.width = W * dpr; cv.height = H * dpr;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    S = Math.max(.52, Math.min(W / 1200, H / 640));
+    hitX = W * (W < 700 ? .62 : .56);
+    roadTop = H * .715; roadBot = H * .925;
+    yH = H * .585; yR = roadTop + 14 * S;
+    spR = Math.max(170, W * .2); spH = spR * .86;
+  }
+  addEventListener('resize', resize); resize();
+
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const y = e.clientY - $('stage').getBoundingClientRect().top;
+    shoot(y < (yH + yR) / 2 ? 'h' : 'r');
+  });
+
+  const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  const rgb = c => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+  const hillY = wx => yH + 26 * S + 8 * S * Math.sin(wx * .0052 / S) + 5 * S * Math.sin(wx * .017 / S + 1);
+
+  function band(col, base, amp, f, off, seed) {
+    g.fillStyle = col; g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 10; x += 8) {
+      const w = (x + off) * f / S;
+      const y = base - amp * (Math.sin(w + seed) * .5 + Math.sin(w * 2.3 + seed * 2) * .28
+        + Math.abs(Math.sin(w * .47 + seed)) * .9 + Math.sin(w * 5.1 + seed) * .08);
+      g.lineTo(x, y);
+    }
+    g.lineTo(W + 10, H); g.closePath(); g.fill();
+  }
+
+  function drawBackdrop(vt) {
+    const h = m.heat;
+    const top = mix([26, 30, 44], [38, 24, 28], h);
+    const mid = mix([98, 74, 70], [150, 62, 34], h);
+    const low = mix([222, 150, 86], [244, 132, 48], h);
+    const sky = g.createLinearGradient(0, 0, 0, H * .72);
+    sky.addColorStop(0, rgb(top)); sky.addColorStop(.62, rgb(mid)); sky.addColorStop(1, rgb(low));
+    g.fillStyle = sky; g.fillRect(0, 0, W, H);
+
+    const sx = W * .72, sy = H * .5, sr = 62 * S * (1 + m.boomGlow * .16);
+    const glow = g.createRadialGradient(sx, sy, sr * .4, sx, sy, sr * 5);
+    glow.addColorStop(0, `rgba(255,214,150,${.55 + m.boomGlow * .25})`); glow.addColorStop(1, 'rgba(255,190,110,0)');
+    g.fillStyle = glow; g.fillRect(0, 0, W, H);
+    g.fillStyle = 'rgba(255,226,176,.9)'; g.beginPath(); g.arc(sx, sy, sr, 0, 7); g.fill();
+
+    band(rgb(mix(mix(mid, top, .4), [60, 44, 46], .35)), H * .5, 92 * S, .0036, vt * spR * .05, 1.1);
+    if (h > .4) drawSmokeColumns(vt, h);
+    band(rgb(mix([58, 46, 48], [58, 34, 30], h)), H * .57, 62 * S, .0062, vt * spR * .16, 3.7);
+    band(rgb(mix([40, 34, 34], [40, 26, 22], h)), H * .63, 34 * S, .011, vt * spR * .38, 6.2);
+
+    g.fillStyle = rgb(mix([30, 26, 24], [32, 21, 17], h)); g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 8; x += 8) g.lineTo(x, hillY(x + vt * spH));
+    g.lineTo(W + 8, H); g.closePath(); g.fill();
+
+    const road = g.createLinearGradient(0, roadTop, 0, roadBot);
+    road.addColorStop(0, rgb(mix([96, 80, 64], [104, 72, 50], h))); road.addColorStop(1, rgb(mix([62, 52, 44], [60, 42, 32], h)));
+    g.fillStyle = road; g.fillRect(0, roadTop, W, roadBot - roadTop);
+    g.fillStyle = rgb(mix([24, 21, 19], [22, 15, 12], h)); g.fillRect(0, roadBot, W, H - roadBot);
+
+    g.fillStyle = 'rgba(20,16,12,.3)';
+    const rut = 74 * S, ro = (vt * spR) % rut;
+    for (let x = -ro; x < W; x += rut) {
+      g.fillRect(x, roadTop + (roadBot - roadTop) * .36, rut * .46, 2.5 * S);
+      g.fillRect(x + rut * .3, roadTop + (roadBot - roadTop) * .78, rut * .6, 3 * S);
+    }
+    // Roadside posts anchor the scroll speed of the road plane.
+    g.fillStyle = 'rgba(14,11,9,.9)';
+    const pg = 310 * S, po = (vt * spR) % pg;
+    for (let x = -po; x < W + pg; x += pg) {
+      g.fillRect(x, roadBot - 2 * S, 5 * S, 26 * S);
+      g.fillRect(x - 4 * S, roadBot + 3 * S, 13 * S, 3 * S);
+    }
+  }
+
+  function drawSmokeColumns(vt, h) {
+    for (const [wx, sc] of [[.2, 1], [.88, .7], [1.5, 1.2]]) {
+      const x = ((wx * W - vt * spR * .1) % (W * 1.6) + W * 1.6) % (W * 1.6) - W * .2;
+      const base = H * .55;
+      for (let i = 0; i < 9; i++) {
+        const y = base - i * 26 * S * sc;
+        const r = (12 + i * 7) * S * sc;
+        const dx = Math.sin(vt * .35 + i * .7) * (4 + i * 3) * S + i * i * .9 * S;
+        g.fillStyle = `rgba(24,18,18,${(.34 - i * .028) * (h - .3)})`;
+        g.beginPath(); g.arc(x + dx, y, r, 0, 7); g.fill();
+      }
+    }
+  }
+
+  function wheel(x, y, r, ang, col) {
+    g.fillStyle = col; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(190,170,140,.35)'; g.lineWidth = 1.4;
+    g.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const a = ang + i * 1.047;
+      g.moveTo(x - Math.cos(a) * r * .62, y - Math.sin(a) * r * .62);
+      g.lineTo(x + Math.cos(a) * r * .62, y + Math.sin(a) * r * .62);
+    }
+    g.stroke();
+  }
+  function poly(pts) { g.beginPath(); g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); g.closePath(); g.fill(); }
+
+  const HULL = '#1b1c17', RIM = 'rgba(255,190,120,.2)';
+
+  function truck(x, y, s, bob, ang) {
+    g.save(); g.translate(x, y + bob); g.scale(s, s); g.fillStyle = HULL;
+    poly([-74, -14, -74, -52, -66, -60, 18, -60, 24, -52, 24, -14]);
+    g.fillStyle = '#23241c'; g.fillRect(-74, -14, 100, 7);
+    g.fillStyle = HULL; poly([28, -8, 28, -48, 50, -48, 62, -28, 72, -25, 72, -8]);
+    g.fillStyle = 'rgba(240,170,90,.32)'; poly([34, -44, 48, -44, 56, -30, 34, -30]);
+    g.fillStyle = RIM; g.fillRect(-66, -60, 84, 2);
+    g.restore();
+    for (const wx of [-52, -24, 50]) wheel(x + wx * s, y - 11 * s + bob * .3, 11 * s, ang, '#101009');
+  }
+  function tank(x, y, s, bob, ang) {
+    g.save(); g.translate(x, y + bob * .6); g.scale(s, s); g.fillStyle = '#12120d';
+    g.beginPath(); g.roundRect(-92, -24, 184, 24, 12); g.fill();
+    g.fillStyle = HULL; poly([-88, -24, -80, -40, 62, -40, 96, -24]);
+    g.beginPath(); g.ellipse(-6, -48, 40, 13, 0, 0, 7); g.fill();
+    g.fillRect(30, -52, 96, 5); g.fillRect(118, -54, 12, 9);
+    g.fillStyle = RIM; g.fillRect(-36, -60, 58, 2);
+    g.restore();
+    for (let i = 0; i < 6; i++) wheel(x + (-68 + i * 27) * s, y - 11 * s, 9 * s, ang * 1.2, '#22221a');
+  }
+  function apc(x, y, s, bob, ang, aim) {
+    g.save(); g.translate(x, y + bob); g.scale(s, s); g.fillStyle = HULL;
+    poly([-84, -12, -90, -30, -62, -46, 42, -46, 80, -24, 86, -11, 62, -6, -72, -6]);
+    g.fillStyle = RIM; g.fillRect(-60, -46, 100, 2);
+    g.fillStyle = HULL; poly([-26, -46, -16, -62, 14, -62, 24, -46]);
+    g.save(); g.translate(4, -55); g.rotate(aim);
+    g.fillRect(0, -2.5, 58, 5); g.fillRect(52, -3.5, 10, 7);
+    g.restore();
+    g.strokeStyle = HULL; g.lineWidth = 1.5; g.beginPath(); g.moveTo(-54, -46); g.quadraticCurveTo(-60, -80, -74, -104); g.stroke();
+    g.restore();
+    for (const wx of [-58, -26, 18, 50]) wheel(x + wx * s, y - 12 * s + bob * .3, 12 * s, ang, '#101009');
+  }
+
+  function drawConvoy(vt) {
+    const s = S, y = roadTop + (roadBot - roadTop) * .72;
+    const leadX = hitX - (W < 700 ? 118 : 180) * s;
+    const ang = vt * spR / (12 * s);
+    const bob = i => (m.pulse * 2.6 + Math.sin(vt * 8 + i * 1.9) * .5) * s * (reduced ? .2 : 1);
+    truck(leadX - 590 * s, y, s, bob(3), ang);
+    tank(leadX - 400 * s, y, s, bob(2), ang);
+    truck(leadX - 190 * s, y, s, bob(1), ang);
+
+    const pivotX = leadX + 4 * s, pivotY = y + bob(0) - 55 * s;
+    if (targetAim) {
+      const want = Math.atan2(targetAim.y - pivotY, targetAim.x - pivotX);
+      turret += (Math.max(-.7, Math.min(.2, want)) - turret) * .22;
+    } else turret += (-.06 - turret) * .05;
+    apc(leadX, y, s, bob(0), ang, turret);
+
+    const mx = pivotX + Math.cos(turret) * 62 * s, my = pivotY + Math.sin(turret) * 62 * s;
+    if (muzzle > .02) {
+      g.fillStyle = `rgba(255,214,130,${muzzle})`;
+      g.beginPath(); g.arc(mx, my, (10 + 16 * muzzle) * s, 0, 7); g.fill();
+    }
+    if (Math.random() < .3) {
+      const ex = [leadX - 92 * s, leadX - 190 * s - 78 * s, leadX - 400 * s - 92 * s, leadX - 590 * s - 78 * s][Math.random() * 4 | 0];
+      addPart(ex, y - 12 * s, 'smoke');
+    }
+    return { mx, my };
+  }
+
+  function addPart(x, y, kind) {
+    if (parts.length > 240) parts.shift();
+    if (kind === 'smoke') parts.push({ x, y, vx: -spR * .55 - Math.random() * 14, vy: -14 - Math.random() * 16, r: 4 * S, grow: 15 * S, life: 1.3, age: 0, col: '26,22,20', a: .28 });
+    else if (kind === 'dust') parts.push({ x, y, vx: -spR * .8 - Math.random() * 30, vy: -8 - Math.random() * 16, r: 6 * S, grow: 26 * S, life: 1.1, age: 0, col: '132,108,84', a: .2 });
+    else if (kind === 'spark') {
+      const a = Math.random() * 6.28, v = 60 + Math.random() * 180;
+      parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, r: 1.6 * S, grow: 0, life: .45, age: 0, col: '255,190,90', a: 1, g: 340 });
+    } else if (kind === 'blast') parts.push({ x, y, vx: -spR * .6 + (Math.random() - .5) * 40, vy: -26 - Math.random() * 34, r: 8 * S, grow: 40 * S, life: 1.5, age: 0, col: '34,26,22', a: .5 });
+  }
+
+  function drawParts(dt) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.age += dt;
+      if (p.age > p.life) { parts.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; if (p.g) p.vy += p.g * dt;
+      const k = p.age / p.life;
+      g.fillStyle = `rgba(${p.col},${p.a * (1 - k)})`;
+      g.beginPath(); g.arc(p.x, p.y, p.r + p.grow * k, 0, 7); g.fill();
+    }
+  }
+
+  function soldier(x, y, s, fall, alpha) {
+    g.save(); g.globalAlpha = alpha; g.translate(x, y); g.rotate(fall * 1.45); g.scale(s, s);
+    g.fillStyle = '#0e0c0a';
+    g.fillRect(-6, -18, 5, 18); g.fillRect(1, -18, 5, 18);
+    poly([-8, -18, 8, -18, 7, -38, -7, -38]);
+    g.beginPath(); g.arc(0, -44, 6, 0, 7); g.fill();
+    g.fillRect(-9, -47, 18, 3);
+    g.strokeStyle = '#0e0c0a'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(-14, -30); g.lineTo(-30, -34); g.stroke();
+    g.restore();
+  }
+  function nest(x, y, s) {
+    g.save(); g.translate(x, y); g.scale(s, s);
+    g.fillStyle = '#17120e';
+    for (let r = 0; r < 3; r++) for (let i = 0; i < 4 - r; i++) {
+      g.beginPath(); g.roundRect(-34 + i * 17 + r * 8, -9 - r * 8, 17, 9, 4); g.fill();
+    }
+    g.restore();
+  }
+
+  function drawEnemy(n, vt) {
+    const sp = n.lane === 'h' ? spH : spR;
+    const x = hitX + (n.time - vt) * sp;
+    if (x < -80 || x > W + 80) return;
+    const dead = n.state === 'dead';
+    const since = dead ? vt - n.deadAt : 0;
+    const fall = dead ? Math.min(1, since / .28) : 0;
+    const alpha = dead ? Math.max(0, 1 - Math.max(0, since - 1.1) / .8) : 1;
+    if (n.lane === 'h') {
+      const y = hillY(x + vt * spH);
+      soldier(x, y + 2 * S, 1.02 * S, fall, alpha);
+      if (!dead && n.state !== 'miss') marker(x, y - 62 * S);
+    } else {
+      const y = yR + 22 * S;
+      soldier(x + 2 * S, y - 8 * S, 1.02 * S, fall, alpha);
+      nest(x, y + 4 * S, 1.1 * S);
+      if (!dead && n.state !== 'miss') marker(x, y - 62 * S);
+    }
+  }
+  function marker(x, y) {
+    g.fillStyle = '#e4572e';
+    g.beginPath(); g.moveTo(x - 6 * S, y); g.lineTo(x + 6 * S, y); g.lineTo(x, y + 8 * S); g.closePath(); g.fill();
+  }
+
+  function drawReticles(vt) {
+    const R = 21 * S;
+    for (const [lane, y, label] of [['h', yH + 2 * S, 'F'], ['r', yR, 'J']]) {
+      const next = m.notes.find(n => n.state === 'wait' && n.lane === lane);
+      const dt = next ? next.time - vt : 9;
+      const live = m.mode === 'run' || m.mode === 'paused';
+      const near = live && dt >= 0 && dt < BEAT * 1.5;
+      g.lineWidth = 2 * Math.max(S, .75);
+      g.strokeStyle = near ? 'rgba(255,179,71,1)' : 'rgba(233,223,201,.5)';
+      const rr = R * (1 + m.pulse * .08);
+      g.beginPath(); g.arc(hitX, y, rr, 0, 7);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        g.moveTo(hitX + dx * rr * .55, y + dy * rr * .55); g.lineTo(hitX + dx * rr * 1.3, y + dy * rr * 1.3);
+      }
+      g.stroke();
+      if (near) {
+        g.strokeStyle = `rgba(255,179,71,${.9 - dt / (BEAT * 1.5) * .6})`;
+        g.beginPath(); g.arc(hitX, y, R + (dt / (BEAT * 1.5)) * 62 * S, 0, 7); g.stroke();
+      }
+      if (live && !m.auto) {
+        g.fillStyle = 'rgba(233,223,201,.78)';
+        g.font = `600 ${Math.max(12, 14 * S)}px "IBM Plex Mono", monospace`;
+        g.textAlign = 'left';
+        g.fillText(label, hitX + rr * 1.55, y + 5 * S);
+      }
+    }
+    if (m.dry && performance.now() - m.dry.at < 140) {
+      const y = m.dry.lane === 'h' ? yH + 2 * S : yR;
+      g.strokeStyle = 'rgba(233,223,201,.8)'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(hitX, y, R * .6, 0, 7); g.stroke();
+    }
+  }
+
+  function drawTracers(vt) {
+    for (let i = tracers.length - 1; i >= 0; i--) {
+      const t = tracers[i], k = (performance.now() - t.at) / t.dur;
+      if (k >= 1.5) { tracers.splice(i, 1); continue; }
+      const a = Math.min(1, k), b = Math.max(0, k - .5);
+      g.strokeStyle = t.col; g.lineWidth = t.w; g.lineCap = 'round';
+      g.globalAlpha = Math.min(1, 1.5 - k);
+      g.beginPath();
+      g.moveTo(t.x0 + (t.x1 - t.x0) * b, t.y0 + (t.y1 - t.y0) * b);
+      g.lineTo(t.x0 + (t.x1 - t.x0) * a, t.y0 + (t.y1 - t.y0) * a);
+      g.stroke(); g.globalAlpha = 1; g.lineCap = 'butt';
+    }
+  }
+
+  function drawPopups(dt) {
+    g.textAlign = 'center';
+    for (let i = popups.length - 1; i >= 0; i--) {
+      const p = popups[i]; p.age += dt;
+      if (p.age > .65) { popups.splice(i, 1); continue; }
+      g.fillStyle = p.col; g.globalAlpha = 1 - p.age / .65;
+      g.font = `400 ${Math.max(14, 19 * S)}px "Russo One", Impact, sans-serif`;
+      g.fillText(p.text, p.x, p.y - p.age * 34);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function fxFire(n, vt, muzz) {
+    const sp = n.lane === 'h' ? spH : spR;
+    const x = hitX + (n.time - vt) * sp;
+    const y = n.lane === 'h' ? hillY(x + vt * spH) - 26 * S : yR + 6 * S;
+    tracers.push({ x0: muzz.mx, y0: muzz.my, x1: x, y1: y, at: performance.now(), dur: 70, col: '#ffcf7a', w: 2.6 * Math.max(S, .7) });
+    muzzle = 1; m.pulse = Math.max(m.pulse, .55); targetAim = { x, y };
+    for (let i = 0; i < 12; i++) addPart(x, y, 'spark');
+    for (let i = 0; i < 4; i++) addPart(x, y, 'blast');
+    if (!m.auto) popups.push({
+      text: n.grade === 'perfect' ? 'ТОЧНО' : 'ПОПАЛ', x: hitX, y: (n.lane === 'h' ? yH : yR) - 34 * S,
+      age: 0, col: n.grade === 'perfect' ? '#ffb347' : '#e9dfc9' });
+  }
+
+  function fxMiss(n, vt, muzz) {
+    const sp = n.lane === 'h' ? spH : spR;
+    const x = hitX + (n.time - vt) * sp;
+    const y = n.lane === 'h' ? hillY(x + vt * spH) - 34 * S : yR + 2 * S;
+    tracers.push({ x0: x, y0: y, x1: muzz.mx - 30 * S, y1: muzz.my + 30 * S, at: performance.now(), dur: 110, col: '#e4572e', w: 2 * Math.max(S, .7) });
+    hostileShot(ac.currentTime);
+    popups.push({ text: 'МИМО', x: hitX, y: (n.lane === 'h' ? yH : yR) - 34 * S, age: 0, col: '#e4572e' });
+  }
+
+  function syncHud() {
+    $('score').textContent = m.score.toLocaleString('ru-RU');
+    $('combo').textContent = m.combo;
+    $('armorFill').style.width = m.armor + '%';
+    $('armor').classList.toggle('low', m.armor <= 30);
+  }
+
+  // Timeline segments are sized by each part's real length in bars.
+  SONG.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'seg'; d.style.flex = `${s.bars} 1 0`;
+    d.innerHTML = `<u><i id="seg${i}"></i></u><em>${s.name}</em>`;
+    $('timeline').append(d);
+  });
+
+  function updateRun(vt, muzz) {
+    while (pulses.length && pulses[0].at <= vt) {
+      const p = pulses.shift();
+      m.pulse = Math.max(m.pulse, p.amp);
+      if (p.boom) m.boomGlow = Math.max(m.boomGlow, p.amp);
+    }
+    for (const n of m.notes) {
+      if (n.state === 'armed' && vt >= n.fire) {
+        n.state = 'dead'; n.deadAt = vt; fxFire(n, vt, muzz);
+      } else if (n.state === 'wait' && vt > n.time + GOOD && !m.auto) {
+        n.state = 'miss'; m.miss++; m.combo = 0; m.armor = Math.max(0, m.armor - 5);
+        fxMiss(n, vt, muzz); syncHud();
+        if (m.armor <= 0) { finish(true); return; }
+      }
+    }
+    const next = m.notes.find(n => n.state === 'wait' && n.time - vt < BEAT * 1.5);
+    if (next) targetAim = { x: hitX + 20 * S, y: next.lane === 'h' ? yH - 10 * S : yR };
+
+    const bar = Math.max(0, Math.floor(vt / (STEP * 16)));
+    const sec = sectionAtBar(bar);
+    if (sec !== m.section) {
+      m.section = sec;
+      $('secName').textContent = sec.name;
+      $('secSub').textContent = m.auto ? sec.sub + ' · режим прослушивания' : sec.sub;
+    }
+    SONG.forEach((s, i) => {
+      const k = Math.max(0, Math.min(1, (vt / (STEP * 16) - s.start) / s.bars));
+      $('seg' + i).style.width = k * 100 + '%';
+    });
+
+    // Return fire keeps the two heavy sections alive even when the gunner is perfect.
+    if (sec.heat > .8 && Math.random() < .035) {
+      const fromHill = Math.random() < .6;
+      const x = W * (.7 + Math.random() * .3);
+      const y = fromHill ? hillY(x + vt * spH) - 24 * S : yR;
+      tracers.push({ x0: x, y0: y, x1: muzz.mx - Math.random() * 300 * S, y1: muzz.my + (10 + Math.random() * 30) * S, at: performance.now(), dur: 130, col: 'rgba(228,87,46,.9)', w: 1.6 * Math.max(S, .7) });
+    }
+    if (vt > TOTAL + .6) finish(false);
+  }
+
+  function frame(now) {
+    const dt = Math.min(.05, (now - lastFrame) / 1000); lastFrame = now;
+    const running = m.mode === 'run' || m.mode === 'paused';
+    const ended = m.mode === 'done' || m.mode === 'failed';
+    let vt;
+    if (ac && (running || ended)) { vt = visualNow(); }
+    else { idleT += reduced ? 0 : dt * .55; vt = idleT + 40; }
+
+    const targetHeat = running && m.section ? m.section.heat : ended ? .12 : .18;
+    m.heat += (targetHeat - m.heat) * Math.min(1, dt * 1.4);
+    m.pulse *= Math.pow(.0025, dt);
+    m.boomGlow *= Math.pow(.08, dt);
+    muzzle *= Math.pow(.0002, dt);
+
+    g.save();
+    if (!reduced && running) {
+      const sh = m.pulse * (1.2 + m.heat * 3.4) * S;
+      g.translate((Math.random() - .5) * sh, (Math.random() - .5) * sh);
+    }
+    drawBackdrop(vt);
+    if (running || ended) for (const n of m.notes) {
+      if (n.lane === 'h' && n.time - vt < 6) drawEnemy(n, vt);
+    }
+    if (running) drawReticles(vt);
+    if (running || ended) for (const n of m.notes) {
+      if (n.lane === 'r' && n.time - vt < 6) drawEnemy(n, vt);
+    }
+    const dustY = roadTop + (roadBot - roadTop) * .72;
+    if (Math.random() < .45) addPart(hitX - (W < 700 ? 240 : 300) * S - Math.random() * 500 * S, dustY - 4 * S, 'dust');
+    const muzz = drawConvoy(vt);
+    drawParts(m.mode === 'paused' ? 0 : dt);
+    drawTracers(vt);
+    drawPopups(dt);
+    if (!reduced && m.boomGlow > .02) {
+      g.fillStyle = `rgba(255,190,110,${m.boomGlow * .07})`; g.fillRect(-20, -20, W + 40, H + 40);
+    }
+    g.restore();
+
+    if (m.mode === 'run') updateRun(vt, muzz);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
